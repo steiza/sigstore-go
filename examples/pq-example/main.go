@@ -5,12 +5,20 @@ import (
 	"crypto"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"strings"
+	"time"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	protocommon "github.com/sigstore/protobuf-specs/gen/pb-go/common/v1"
+	"github.com/sigstore/sigstore-go/pkg/bundle"
+	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/sign"
+	"github.com/sigstore/sigstore-go/pkg/verify"
+	"github.com/sigstore/sigstore/pkg/signature"
 	"golang.org/x/crypto/sha3"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -52,6 +60,41 @@ func (pqk PQKeypair) SignData(_ context.Context, data []byte) ([]byte, []byte, e
 	return sig[:], digest[:], err
 }
 
+type PQVerifier struct {
+	pubKey *mldsa65.PublicKey
+}
+
+func (pqv PQVerifier) PublicKey(opts ...signature.PublicKeyOption) (crypto.PublicKey, error) {
+	return pqv.pubKey, nil
+}
+
+func (pqv PQVerifier) VerifySignature(signature, message io.Reader, opts ...signature.VerifyOption) error {
+	messageBytes, err := io.ReadAll(message)
+	if err != nil {
+		return errors.New("unable to read message")
+	}
+	sigBytes, err := io.ReadAll(signature)
+	if err != nil {
+		return errors.New("unable to read signature")
+	}
+	digest := sha3.Sum256(messageBytes)
+	if mldsa65.Verify(pqv.pubKey, digest[:], nil, sigBytes) {
+		return nil
+	} else {
+		return errors.New("failed to verify")
+	}
+}
+
+func (pqv PQVerifier) ValidAtTime(_ time.Time) bool {
+	return true
+}
+
+func trustedPublicKeyMaterial(pqv PQVerifier) *root.TrustedPublicKeyMaterial {
+	return root.NewTrustedPublicKeyMaterial(func(string) (root.TimeConstrainedVerifier, error) {
+		return &pqv, nil
+	})
+}
+
 func main() {
 	pubKey, privKey, err := mldsa65.GenerateKey(rand.Reader)
 	if err != nil {
@@ -65,15 +108,48 @@ func main() {
 		Data: []byte("hello world!"),
 	}
 
-	bundle, err := sign.Bundle(&content, keypair, sign.BundleOptions{})
+	protobundle, err := sign.Bundle(&content, keypair, sign.BundleOptions{})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	bundleJSON, err := protojson.Marshal(bundle)
+	bundleJSON, err := protojson.Marshal(protobundle)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	fmt.Println("bundle:")
 	fmt.Println(string(bundleJSON))
+	fmt.Println("public key:")
+	var buf [mldsa65.PublicKeySize]byte
+	keypair.pubKey.Pack(&buf)
+	fmt.Println(base64.StdEncoding.EncodeToString(buf[:]))
+
+	// Perform verification
+	pubKey.Unpack(&buf)
+	verifier := PQVerifier{
+		pubKey: pubKey,
+	}
+	var trustedMaterial = make(root.TrustedMaterialCollection, 0)
+	trustedMaterial = append(trustedMaterial, trustedPublicKeyMaterial(verifier))
+	b, err := bundle.NewBundle(protobundle)
+	if err != nil {
+		log.Fatal(err)
+	}
+	verifierConfig := []verify.VerifierOption{}
+	verifierConfig = append(verifierConfig, verify.WithNoObserverTimestamps())
+	identityPolicies := []verify.PolicyOption{}
+	identityPolicies = append(identityPolicies, verify.WithKey())
+	artifactPolicy := verify.WithArtifact(strings.NewReader("hello world!"))
+
+	sev, err := verify.NewVerifier(trustedMaterial, verifierConfig...)
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, err = sev.Verify(b, verify.NewPolicy(artifactPolicy, identityPolicies...))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("verification success!")
 }

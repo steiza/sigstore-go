@@ -5,6 +5,7 @@ go 1.24.2
 require (
 	github.com/cloudflare/circl v1.6.1
 	github.com/sigstore/protobuf-specs v0.5.0
+	github.com/sigstore/sigstore v1.9.6-0.20250729224751-181c5d3339b3
 	github.com/sigstore/sigstore-go v1.1.2
 	golang.org/x/crypto v0.42.0
 	google.golang.org/protobuf v1.36.9
@@ -97,7 +98,6 @@ require (
 	github.com/shibumi/go-pathspec v1.3.0 // indirect
 	github.com/sigstore/rekor v1.4.2 // indirect
 	github.com/sigstore/rekor-tiles v0.1.10 // indirect
-	github.com/sigstore/sigstore v1.9.6-0.20250729224751-181c5d3339b3 // indirect
 	github.com/sigstore/timestamp-authority v1.2.8 // indirect
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
